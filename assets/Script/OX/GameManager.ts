@@ -1,11 +1,14 @@
-import { _decorator, Component, Node, Label } from 'cc';
+import { _decorator, Component, Node, Prefab, instantiate, Label } from 'cc';
 import { CellSymbol } from './CellSymbol';
 const { ccclass, property } = _decorator;
 
 @ccclass('GameManager')
 export class GameManager extends Component {
-    @property([Node])
-    cells: Node[] = [];
+    @property(Prefab)
+    cellPrefab: Prefab = null;
+
+    @property(Node)
+    boardNode: Node = null;
 
     @property(Node)
     resultLabel: Node = null;
@@ -15,39 +18,51 @@ export class GameManager extends Component {
 
     private board: string[] = Array(9).fill('');
     private gameOver: boolean = false;
+    private cells: Node[] = [];
+    private cellSize = 230; // 每個 Cell 的大小（可以依圖片調整）
 
     onLoad() {
-        // 綁定 reset 按鈕事件
-        this.resetButton.on(Node.EventType.TOUCH_END, this.resetGame, this);
-
-        // 初始化每一格，設置該格的 index 和 gameManager引用
-        this.cells.forEach((cell, index) => {
-        const cellSymbol = cell.getComponent(CellSymbol);
-        if (cellSymbol) {
-            cellSymbol.index = index;
-            cellSymbol.gameManager = this;
-        }
-    });
-
-        this.resetGame();
+        this.resetButton.on('click', this.resetGame, this);
+        this.createCells(); // 初次產生格子
+        this.resetGame();   // 開始時先清空
     }
 
-    // 當玩家點擊格子時被呼叫，傳入點擊的格子索引
+    // 動態建立格子，並手動設定位置
+    private createCells() {
+        const spacing = 5;
+        const offsetX = -this.cellSize + spacing;
+        const offsetY = this.cellSize - spacing;
+
+        for (let i = 0; i < 9; i++) {
+            const cell = instantiate(this.cellPrefab);
+            this.boardNode.addChild(cell);
+
+            const row = Math.floor(i / 3);
+            const col = i % 3;
+
+            const x = offsetX + col * (this.cellSize + spacing);
+            const y = offsetY - row * (this.cellSize + spacing);
+
+            cell.setPosition(x, y);
+
+            const cellSymbol = cell.getComponent(CellSymbol);
+            if (cellSymbol) {
+                cellSymbol.init(i, this);
+            }
+
+            this.cells[i] = cell;
+             console.log(`Cell ${i} created`);
+        }
+    }
+
     public onCellClicked(index: number) {
-        if (this.gameOver || this.board[index] !== '') {
-            return;
-        }
+        if (this.gameOver || this.board[index] !== '') return;
 
-        this.playerMove(index);
-    }
-
-    // 玩家下棋行為
-    private playerMove(index: number) {
         this.board[index] = 'O';
-        this.cells[index].getComponent(CellSymbol).setSymbol('O');
+        this.cells[index].getComponent(CellSymbol).show('O');
 
         if (this.checkWinner('O')) {
-            this.endGame('玩家勝利!');
+            this.endGame('玩家勝利！');
             return;
         }
 
@@ -56,44 +71,48 @@ export class GameManager extends Component {
             return;
         }
 
-        // 遊戲沒結束，延遲 0.3 秒讓 AI 下棋
         this.scheduleOnce(() => this.aiMove(), 0.3);
     }
-    
-    // AI 下棋策略
-    private aiMove() {
-    // 1.  嘗試找能讓 AI 贏的下一步，直接下贏
-        for (const i of this.getEmptyIndices()) {
-            this.board[i] = 'X';
-            if (this.checkWinner('X')) {
-                this.cells[i].getComponent(CellSymbol).setSymbol('X');
-                this.endGame('AI勝利！');
-                return;
-            }
-            this.board[i] = ''; // 還原
-        }
 
-    // 2. 如果 AI 不能贏，檢查玩家是否快贏，要阻擋玩家
-    for (const i of this.getEmptyIndices()) {
+    private aiMove() {
+    // 先找AI自己可以贏的位置
+    const emptyIndices = this.board
+        .map((v, i) => (v === '' ? i : -1))
+        .filter(i => i !== -1);
+
+    // 1. 嘗試讓AI贏
+    for (const i of emptyIndices) {
+        this.board[i] = 'X';
+        if (this.checkWinner('X')) {
+            this.cells[i].getComponent(CellSymbol).show('X');
+            this.endGame('AI勝利！');
+            this.gameOver = true;
+            return;
+        }
+        this.board[i] = '';
+    }
+
+    // 2. 阻擋玩家贏
+    for (const i of emptyIndices) {
         this.board[i] = 'O';
         if (this.checkWinner('O')) {
             this.board[i] = 'X';
-            this.cells[i].getComponent(CellSymbol).setSymbol('X');
+            this.cells[i].getComponent(CellSymbol).show('X');
+            this.board[i] = 'X'; // 確保board狀態是AI的符號
+            if (this.isBoardFull()) {
+                this.endGame('平手！');
+                this.gameOver = true;
+            }
             return;
         }
-        this.board[i] = ''; // 還原
+        this.board[i] = '';
     }
 
-    // 3. AI 沒辦法直接贏或阻擋玩家，隨機選一個空格下棋
-    const emptyIndices = this.getEmptyIndices();
-    if (emptyIndices.length === 0) {
-        this.endGame('平手！');
-        return;
-    }
+    // 3. 隨機下
     const randIndex = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
     this.board[randIndex] = 'X';
-    this.cells[randIndex].getComponent(CellSymbol).setSymbol('X');
-    // 再次檢查 AI 是否贏了
+    this.cells[randIndex].getComponent(CellSymbol).show('X');
+
     if (this.checkWinner('X')) {
         this.endGame('AI勝利！');
     } else if (this.isBoardFull()) {
@@ -101,23 +120,13 @@ export class GameManager extends Component {
     }
 }
 
-    //取得所有空白格子的索引，方便 AI 找位置下棋
-    private getEmptyIndices(): number[] {
-        return this.board
-            .map((v, i) => (v === '' ? i : -1))
-            .filter(i => i !== -1);
-}
-
-      // 判斷指定玩家是否獲勝
     private checkWinner(player: string): boolean {
         const wins = [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8], // 橫排
-            [0, 3, 6], [1, 4, 7], [2, 5, 8], // 直排
-            [0, 4, 8], [2, 4, 6]             // 斜線
+            [0,1,2], [3,4,5], [6,7,8],
+            [0,3,6], [1,4,7], [2,5,8],
+            [0,4,8], [2,4,6]
         ];
-        return wins.some(pattern =>
-            pattern.every(i => this.board[i] === player)
-        );
+        return wins.some(pattern => pattern.every(i => this.board[i] === player));
     }
 
     private isBoardFull(): boolean {
@@ -133,12 +142,9 @@ export class GameManager extends Component {
         this.board.fill('');
         this.gameOver = false;
         this.resultLabel.getComponent(Label).string = '';
-
         this.cells.forEach(cell => {
-            const cellSymbol = cell.getComponent(CellSymbol);
-            if (cellSymbol) {
-                cellSymbol.setSymbol('');
-            }
+            const symbol = cell.getComponent(CellSymbol);
+            if (symbol) symbol.show('');
         });
     }
 }
